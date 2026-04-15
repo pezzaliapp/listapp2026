@@ -1,0 +1,13 @@
+{
+  "name": "ListApp 2026",
+  "short_name": "ListApp",
+  "description": "Estrattore listino figurativo PDF verso Excel con immagini prodotto",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#121212",
+  "theme_color": "#00b894",
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
