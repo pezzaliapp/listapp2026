@@ -1,65 +1,49 @@
-import { useState, useRef, useEffect } from 'react';
-import { loadProducts, clearProducts, countProducts, loadProcessedPages } from '../utils/storage';
+import { useRef, useEffect, useState } from 'react';
+import { clearProducts } from '../utils/storage';
 
-const BATCH = 5; // pages per session (safe for free tier)
+const BATCH = 5;
 
-export default function SetupView({ onProcess }) {
-  const [pdfFile,  setPdfFile]  = useState(null);
-  const [apiKey,   setApiKey]   = useState(() => localStorage.getItem('gmn_key') || '');
-  const [dragging, setDragging] = useState(false);
-  const [nPages,   setNPages]   = useState(null);
-  const [rangeFrom,setFrom]     = useState(1);
-  const [rangeTo,  setTo]       = useState(BATCH);
-  const [stored,   setStored]   = useState(0);
-  const [processedPages, setProcessedPages] = useState([]);
+export default function SetupView({
+  pdfFile, apiKey, nPages, processedPages, storedCount,
+  onPdfLoaded, onApiKeyChange, onProcess
+}) {
+  const [dragging,  setDragging]  = useState(false);
+  const [rangeFrom, setFrom]      = useState(1);
+  const [rangeTo,   setTo]        = useState(BATCH);
   const pdfRef = useRef();
 
-  // When PDF changes, count pages and load stored state
+  // When nPages changes, suggest next unprocessed batch
   useEffect(() => {
-    if (!pdfFile) { setNPages(null); setStored(0); return; }
-    (async () => {
-      const { getDocument } = await import('pdfjs-dist');
-      const buf = await pdfFile.arrayBuffer();
-      const pdf = await getDocument({ data: buf }).promise;
-      const n   = pdf.numPages;
-      setNPages(n);
-      setFrom(1);
-      setTo(Math.min(BATCH, n));
-      const cnt  = countProducts(pdfFile.name);
-      const done = loadProcessedPages(pdfFile.name);
-      setStored(cnt);
-      setProcessedPages(done);
-    })();
-  }, [pdfFile]);
+    if (!nPages) return;
+    suggestNext();
+  }, [nPages, processedPages.length]);
 
-  const handleKey = e => {
-    setApiKey(e.target.value);
-    localStorage.setItem('gmn_key', e.target.value);
-  };
-
-  const handleDrop = e => {
-    e.preventDefault(); setDragging(false);
-    const f = e.dataTransfer.files[0];
-    if (f?.type === 'application/pdf') setPdfFile(f);
-  };
-
-  const handleClear = () => {
-    if (pdfFile) { clearProducts(pdfFile.name); setStored(0); setProcessedPages([]); }
-  };
-
-  // Suggest next unprocessed batch
   const suggestNext = () => {
     if (!nPages) return;
-    // Find first page not yet processed
     let start = 1;
     while (processedPages.includes(start) && start <= nPages) start++;
+    if (start > nPages) return; // all done
     const end = Math.min(start + BATCH - 1, nPages);
     setFrom(start);
     setTo(end);
   };
 
-  const canGo = pdfFile && apiKey.trim().length > 10 && nPages;
+  const handleFile = async (file) => {
+    if (!file || file.type !== 'application/pdf') return;
+    const { getDocument } = await import('pdfjs-dist');
+    const buf = await file.arrayBuffer();
+    const pdf = await getDocument({ data: buf }).promise;
+    onPdfLoaded(file, pdf.numPages);
+  };
+
+  const handleDrop = e => {
+    e.preventDefault(); setDragging(false);
+    handleFile(e.dataTransfer.files[0]);
+  };
+
   const allDone = nPages && processedPages.length >= nPages;
+  const canGo   = pdfFile && apiKey.trim().length > 10 && nPages && !allDone;
+  const pagesInBatch = rangeTo - rangeFrom + 1;
 
   return (
     <div className="setup-view">
@@ -68,9 +52,9 @@ export default function SetupView({ onProcess }) {
       <div className="hero-box">
         <h2>Estrai dati dal listino PDF</h2>
         <p>
-          Carica il listino Cormach in PDF. L&apos;app lo analizza con Gemini Vision
-          e crea un <strong>CSV con Codice, Descrizione e Prezzo Lordo</strong>.
-          Elabora in batch da {BATCH} pagine per non saturare le API.
+          Carica il PDF, seleziona le pagine da elaborare (es. 5 alla volta)
+          e ripeti fino a completare il listino. I risultati si accumulano
+          e puoi scaricare il CSV in qualsiasi momento.
         </p>
       </div>
 
@@ -85,7 +69,7 @@ export default function SetupView({ onProcess }) {
         onKeyDown={e => e.key === 'Enter' && pdfRef.current.click()}
       >
         <input ref={pdfRef} type="file" accept="application/pdf"
-          style={{ display: 'none' }} onChange={e => setPdfFile(e.target.files[0] || null)} />
+          style={{ display:'none' }} onChange={e => handleFile(e.target.files[0])} />
         {pdfFile ? (
           <div className="drop-ok">
             <span className="drop-ok-icon">&#128196;</span>
@@ -93,7 +77,7 @@ export default function SetupView({ onProcess }) {
               <strong>{pdfFile.name}</strong>
               <span className="drop-meta">
                 {(pdfFile.size/1024/1024).toFixed(1)} MB
-                {nPages ? ` \u2014 ${nPages} pagine totali` : ''}
+                {nPages ? ` — ${nPages} pagine` : ''}
               </span>
             </div>
           </div>
@@ -106,29 +90,29 @@ export default function SetupView({ onProcess }) {
         )}
       </div>
 
-      {/* Accumulated results banner */}
-      {stored > 0 && (
+      {/* Accumulated progress */}
+      {storedCount > 0 && pdfFile && (
         <div className="stored-banner">
           <div>
-            <strong>&#128190; {stored} prodotti gi&#224; estratti</strong>
+            <strong>&#128190; {storedCount} prodotti gi&agrave; estratti</strong>
             <span className="hint">
-              &nbsp;(pagine elaborate: {processedPages.sort((a,b)=>a-b).join(', ')})
+              &nbsp;&mdash; pagine elaborate: {[...processedPages].sort((a,b)=>a-b).slice(0,20).join(', ')}
+              {processedPages.length > 20 ? '...' : ''}
             </span>
           </div>
-          <div style={{ display:'flex', gap:8 }}>
-            <button className="btn-ghost" onClick={handleClear}>
-              &#128465; Azzera
-            </button>
-          </div>
+          <button className="btn-ghost" style={{color:'#e17055',borderColor:'#e17055'}}
+            onClick={() => { clearProducts(pdfFile.name); onPdfLoaded(pdfFile, nPages); }}>
+            &#128465; Azzera
+          </button>
         </div>
       )}
 
-      {/* Page range selector */}
+      {/* Page range */}
       {nPages && (
         <div className="upload-card">
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
-            <h3>Pagine da elaborare</h3>
-            {!allDone && processedPages.length > 0 && (
+            <h3>Pagine da elaborare ora</h3>
+            {!allDone && (
               <button className="btn-ghost" onClick={suggestNext}>
                 &#8594; Prossimo batch
               </button>
@@ -136,42 +120,34 @@ export default function SetupView({ onProcess }) {
           </div>
 
           {allDone ? (
-            <p className="hint" style={{ color:'var(--accent)' }}>
-              &#10003; Tutte le {nPages} pagine sono state elaborate.
+            <p style={{ color:'var(--accent)', fontSize:13 }}>
+              &#10003; Tutte le {nPages} pagine sono state elaborate. Vai ai risultati per scaricare il CSV.
             </p>
           ) : (
             <>
               <div className="range-row">
-                <label>Da pagina</label>
+                <label>Da</label>
                 <input type="number" className="range-input" min={1} max={nPages}
-                  value={rangeFrom}
-                  onChange={e => setFrom(Math.max(1, Math.min(nPages, +e.target.value)))} />
-                <label>a pagina</label>
+                  value={rangeFrom} onChange={e => setFrom(Math.max(1,Math.min(nPages,+e.target.value)))} />
+                <label>a</label>
                 <input type="number" className="range-input" min={1} max={nPages}
-                  value={rangeTo}
-                  onChange={e => setTo(Math.max(rangeFrom, Math.min(nPages, +e.target.value)))} />
+                  value={rangeTo} onChange={e => setTo(Math.max(rangeFrom,Math.min(nPages,+e.target.value)))} />
                 <span className="range-count">
-                  ({rangeTo - rangeFrom + 1} pag. &asymp; {Math.ceil((rangeTo - rangeFrom + 1) * 4.5 / 60)} min)
+                  {pagesInBatch} pag. &asymp; {Math.ceil(pagesInBatch * 4.5 / 60)} min
                 </span>
               </div>
-
-              {/* Visual page grid */}
               <div className="page-grid">
-                {Array.from({ length: nPages }, (_, i) => i + 1).map(p => {
-                  const isDone    = processedPages.includes(p);
-                  const isInRange = p >= rangeFrom && p <= rangeTo;
-                  return (
-                    <div key={p}
-                      className={`page-dot ${isDone ? 'done' : ''} ${isInRange ? 'selected' : ''}`}
-                      title={`Pag. ${p}${isDone ? ' (elaborata)' : ''}`}
-                    />
-                  );
-                })}
+                {Array.from({length: nPages}, (_,i) => i+1).map(p => (
+                  <div key={p}
+                    className={`page-dot${processedPages.includes(p)?' done':''}${(p>=rangeFrom&&p<=rangeTo)?' selected':''}`}
+                    title={`Pag. ${p}${processedPages.includes(p)?' ✓':''}`}
+                  />
+                ))}
               </div>
               <div className="page-legend">
-                <span className="dot done" /> elaborata &nbsp;
-                <span className="dot selected" /> selezionata &nbsp;
-                <span className="dot" /> da fare
+                <span className="dot done"/> elaborate &nbsp;
+                <span className="dot selected"/> selezionate &nbsp;
+                <span className="dot"/> da fare
               </div>
             </>
           )}
@@ -181,24 +157,22 @@ export default function SetupView({ onProcess }) {
       {/* API Key */}
       <div className="upload-card">
         <h3>Chiave API Google (Gemini)</h3>
-        <p className="hint" style={{ marginBottom:8 }}>
-          Gratis su{' '}
+        <p className="hint" style={{marginBottom:8}}>
+          Gratuita su{' '}
           <a href="https://aistudio.google.com/app/apikey" target="_blank"
             rel="noopener noreferrer" className="link">aistudio.google.com</a>.
           Salvata solo nel browser.
         </p>
         <input type="password" className="api-input" value={apiKey}
-          onChange={handleKey} placeholder="AIza..." spellCheck={false} />
+          onChange={e => onApiKeyChange(e.target.value)} placeholder="AIza..." spellCheck={false} />
       </div>
 
       <button
         className="btn-primary btn-go"
-        disabled={!canGo || allDone}
-        onClick={() => onProcess(pdfFile, apiKey.trim(), { from: rangeFrom, to: rangeTo })}
+        disabled={!canGo}
+        onClick={() => onProcess({ from: rangeFrom, to: rangeTo })}
       >
-        {allDone
-          ? '&#10003; Elaborazione completa \u2014 scarica il CSV dai risultati'
-          : `&#128269; Analizza pagine ${rangeFrom}\u2013${rangeTo}`}
+        &#128269; Analizza pagine {rangeFrom}&ndash;{rangeTo}
       </button>
     </div>
   );

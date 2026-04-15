@@ -1,32 +1,49 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import SetupView from './components/SetupView';
 import ProcessingView from './components/ProcessingView';
 import ResultsView from './components/ResultsView';
 import { processPdf } from './utils/pdfProcessor';
-import { loadProducts, saveProducts, saveProcessedPage } from './utils/storage';
+import { loadProducts, saveProducts, saveProcessedPage, loadProcessedPages } from './utils/storage';
 
 export default function App() {
-  const [step,     setStep]     = useState('setup');
-  const [products, setProducts] = useState([]);
-  const [progress, setProgress] = useState({ current:0, total:0, phase:'scan', status:'' });
-  const [error,    setError]    = useState('');
-  const [pdfName,  setPdfName]  = useState('');
+  const [step,       setStep]       = useState('setup');
+  const [products,   setProducts]   = useState([]);
+  const [progress,   setProgress]   = useState({ current:0, total:0, phase:'scan', status:'' });
+  const [error,      setError]      = useState('');
+  const [pdfFile,    setPdfFile]    = useState(null);   // persists across steps
+  const [apiKey,     setApiKey]     = useState(() => localStorage.getItem('gmn_key') || '');
+  const [nPages,     setNPages]     = useState(null);
+  const [donePgs,    setDonePgs]    = useState([]);
 
-  const handleProcess = useCallback(async (pdfFile, apiKey, pageRange) => {
+  // Refresh accumulated state from localStorage
+  const refreshAccumulated = useCallback((file) => {
+    const name = file?.name || pdfFile?.name;
+    if (!name) return;
+    const map  = loadProducts(name);
+    const done = loadProcessedPages(name);
+    setProducts([...map.values()]);
+    setDonePgs(done);
+  }, [pdfFile]);
+
+  const handlePdfLoaded = useCallback((file, pages) => {
+    setPdfFile(file);
+    setNPages(pages);
+    refreshAccumulated(file);
+  }, [refreshAccumulated]);
+
+  const handleProcess = useCallback(async (pageRange) => {
+    if (!pdfFile || !apiKey) return;
     setStep('processing');
     setError('');
-    setPdfName(pdfFile.name);
 
     try {
-      // Load previously accumulated products
       const accumulated = loadProducts(pdfFile.name);
 
-      const newProducts = await processPdf(
-        pdfFile, apiKey, false, // no images in vision mode
+      await processPdf(
+        pdfFile, apiKey, false,
         (prog) => {
           setProgress(prog);
-          // Save each page result as it comes in
-          if (prog.savedCode) {
+          if (prog.savedCode && prog.savedProduct) {
             accumulated.set(prog.savedCode, prog.savedProduct);
             saveProducts(pdfFile.name, accumulated);
           }
@@ -37,20 +54,22 @@ export default function App() {
         pageRange
       );
 
-      // Merge new results into accumulated
-      for (const p of newProducts) {
-        if (!accumulated.has(p.code)) accumulated.set(p.code, p);
-      }
       saveProducts(pdfFile.name, accumulated);
-
-      // Show ALL accumulated products (past + current batch)
+      const done = loadProcessedPages(pdfFile.name);
       setProducts([...accumulated.values()]);
+      setDonePgs(done);
       setStep('results');
     } catch (err) {
       setError(err.message || 'Errore durante l\'elaborazione.');
       setStep('setup');
     }
-  }, []);
+  }, [pdfFile, apiKey]);
+
+  // From results → go back to setup to pick next batch (PDF stays loaded)
+  const handleContinue = useCallback(() => {
+    refreshAccumulated(pdfFile);
+    setStep('setup');
+  }, [pdfFile, refreshAccumulated]);
 
   return (
     <div className="app">
@@ -72,13 +91,25 @@ export default function App() {
             <button className="btn-close" onClick={() => setError('')}>&#10005;</button>
           </div>
         )}
-        {step === 'setup'      && <SetupView      onProcess={handleProcess} />}
+        {step === 'setup' && (
+          <SetupView
+            pdfFile={pdfFile}
+            apiKey={apiKey}
+            nPages={nPages}
+            processedPages={donePgs}
+            storedCount={products.length}
+            onPdfLoaded={handlePdfLoaded}
+            onApiKeyChange={(k) => { setApiKey(k); localStorage.setItem('gmn_key', k); }}
+            onProcess={handleProcess}
+          />
+        )}
         {step === 'processing' && <ProcessingView progress={progress} />}
-        {step === 'results'    && (
+        {step === 'results' && (
           <ResultsView
             products={products}
-            pdfName={pdfName}
-            onBack={() => setStep('setup')}
+            processedPages={donePgs}
+            nPages={nPages}
+            onContinue={handleContinue}
           />
         )}
       </main>

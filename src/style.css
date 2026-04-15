@@ -725,6 +725,28 @@ body {
 .page-legend .dot.done     { background: #00b89455; }
 .page-legend .dot.selected { background: var(--accent); }
 
+
+/* Results progress strip */
+.results-progress-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: rgba(0,184,148,0.07);
+  border: 1px solid rgba(0,184,148,0.25);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text2);
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.results-progress-bar.all-done {
+  background: rgba(0,184,148,0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 @media (max-width: 720px) {
   .app-main { padding: 20px 16px; }
   .results-topbar { flex-direction: column; align-items: stretch; }
