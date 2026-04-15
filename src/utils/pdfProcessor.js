@@ -15,7 +15,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url
 ).href;
 
-const RENDER_SCALE = 1.0;
+const RENDER_SCALE = 0.7; // 417px wide - low token cost, full page visible
 const JPEG_QUALITY   = 0.70;
 const YIELD_EVERY  = 5;
 const API_DELAY    = 4200; // ms — free tier: 15 req/min = 4s min between calls
@@ -38,15 +38,11 @@ function toJpegBase64(canvas, q = 0.70) {
   return canvas.toDataURL('image/jpeg', q).split(',')[1];
 }
 
-/** Crop right 64% of page for Gemini: skips product photo, keeps codes+prices. */
-function cropRightForVision(canvas, q = 0.70) {
-  const sx = Math.floor(canvas.width * 0.36);
-  const sw = canvas.width - sx;
-  const tmp = document.createElement('canvas');
-  tmp.width  = sw;
-  tmp.height = canvas.height;
-  tmp.getContext('2d').drawImage(canvas, sx, 0, sw, canvas.height, 0, 0, sw, canvas.height);
-  return tmp.toDataURL('image/jpeg', q).split(',')[1];
+/** Send full page to Gemini at low resolution. Full context = better extraction. */
+function cropRightForVision(canvas, q = 0.65) {
+  // Send full page - model name headers are top-left, codes+prices bottom-right
+  // At RENDER_SCALE=0.7, canvas is ~417×590px = ~300KB JPEG = ~600 tokens
+  return canvas.toDataURL('image/jpeg', q).split(',')[1];
 }
 
 function cropProductImage(canvas, size = 192) {
@@ -76,26 +72,33 @@ const HAS_PRICE = /\d{1,3}(?:\.\d{3})*,\d{2}/; // no € required - PDF.js may n
 
 // ─── Gemini Vision API ────────────────────────────────────────────────────────
 
-const GEMINI_PROMPT = `Sei un assistente preciso che legge pagine di listino prezzi Cormach.
+const GEMINI_PROMPT = `Sei un assistente preciso che estrae dati da listini prezzi Cormach (attrezzatura per officine: equilibratrici, smontagomme, sollevatori, assetti).
 
-Analizza questa pagina ed estrai TUTTI i prodotti che hanno:
-- Un codice articolo (numero a 8 cifre, es: 01100313)
-- Un prezzo in euro (es: 9.500,00 €)
+COMPITO: Trova TUTTI i prodotti in questa pagina con codice articolo E prezzo visibili.
 
-Per ogni prodotto restituisci un oggetto JSON:
-{
-  "code": "01100313",
-  "description": "Touch MEC 2000S",
-  "price": 9500
-}
+Un prodotto ha:
+- Codice: numero esatto a 8 cifre (es: 01100313, 00100208, 20100376)
+- Prezzo: importo in euro (es: 9.500,00 € → 9500)
+- Descrizione: nome del modello
 
-REGOLE:
-- "description": nome commerciale del prodotto. NON includere: tensione (230V, 400V), fase (1ph, 3ph), frequenza (Hz). Includi varianti come "con NLS", "LIFT", "SONAR", "con Laser", ecc.
-- "price": numero intero in euro (es. 9500 per "9.500,00 €")
-- Se il nome del modello appare come intestazione sopra i codici (es. "TOUCH mec 2000s"), usalo come base per le descrizioni
-- Includi TUTTI i prodotti della pagina, anche le varianti (LIFT, P, GT, ecc.)
-- Rispondi SOLO con il JSON array. Nessun testo, nessun markdown.
-- Se non ci sono prodotti: []`;
+OUTPUT: Solo JSON array, nessun testo, nessun markdown:
+[{"code":"01100313","description":"Touch MEC 2000S","price":9500}, ...]
+
+REGOLE DESCRIZIONE:
+- Usa il nome del modello come intestazione di pagina (es "TOUCH mec 2000S", "CM 1200BB", "F 536S")
+- Aggiungi le varianti: "con NLS", "LIFT", "con Sollevatore", "SONAR", "GT", "con Laser", ecc.
+- NON includere: tensione (230V/400V), fase (1ph/3ph), frequenza (Hz/50Hz/60Hz)
+- Se un codice ha più varianti nella stessa pagina, includi TUTTE con descrizioni distinte
+
+REGOLE CODICE:
+- Solo numeri, esattamente 8 cifre
+- Ignorare codici di accessori standard in piccolo (foto accessori)
+
+REGOLE PREZZO:
+- Converti in intero: "9.500,00 €" → 9500, "22.950,00 €" → 22950
+- Ignorare prezzi senza codice associato
+
+Se nessun prodotto con codice+prezzo: []`;
 
 /**
  * Singola chiamata Gemini Vision.

@@ -74,7 +74,7 @@ export default function ResultsView({ products, processedPages, nPages, onContin
             &#128196; Scarica CSV
           </button>
           <button className="btn-secondary" onClick={handleExcel} disabled={exporting}>
-            {exporting ? '⏳' : '&#128202; Excel'}
+            {exporting ? '⏳' : '📊 Excel'}
           </button>
         </div>
       </div>
